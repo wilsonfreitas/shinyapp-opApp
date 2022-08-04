@@ -3,4 +3,4 @@
 
 opApp
 
-<https://github.com/wilsonfreitas/shinyapp-opApp>
+<https://wilsonfreitas.shinyapps.io/opApp/>
