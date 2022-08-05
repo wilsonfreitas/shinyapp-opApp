@@ -73,6 +73,25 @@ ui <- fluidPage(
         column(10, plotlyOutput("plotImpvol"), offset = 1)
       )
     ),
+    tabPanel(
+      "Fit Modelo Corrado-Su",
+      div(span("1", style = "color: black;")),
+      fluidRow(
+        column(1, actionButton("fitCorradoSuModel", "Fit"), offset = 1),
+        column(
+          2,
+          radioButtons(
+            "strikeOrDelta_CS", "Eixo x (Strike ou Delta)",
+            c("Strike", "Delta"), "Strike",
+            inline = TRUE
+          )
+        ),
+        column(3, tableOutput("csmParams"))
+      ),
+      fluidRow(
+        column(10, plotlyOutput("plotImpvol_CS"), offset = 1)
+      )
+    ),
   ),
 )
 
@@ -189,6 +208,66 @@ server <- function(input, output, session) {
       facet_wrap(type ~ .)
   })
 
+  output$plotImpvol_CS <- renderPlotly({
+    validate(
+      need(input$optionMaturity != "", "Vencimento não definido"),
+      need(length(input$optionMaturity) == 1, "Selecionar apenas 1 vencimento"),
+      need(csmParams(), "Rodar parâmetros")
+    )
+    op <- csmOptionsData()
+    params <- csmParams()
+    strike_rng <- range(op$strike)
+    gen_data <- tibble(
+      type = "Call",
+      close.underlying = op$close.underlying[1],
+      strike = seq(strike_rng[1], strike_rng[2], length.out = 500),
+      time_to_maturity = op$time_to_maturity[1],
+      rate = op$rate[1]
+    )
+    gen_data <- gen_data |>
+      mutate(
+        theo_price = csmprice(
+          type, close.underlying, strike, time_to_maturity, rate, 0,
+          as.numeric(params[1]), as.numeric(params[2]), as.numeric(params[3])
+        ),
+        csm_impvol = bsmimpvol(
+          theo_price, type, close.underlying, strike, time_to_maturity, rate, 0
+        ),
+        delta = csmdelta(
+          type, close.underlying, strike, time_to_maturity, rate, 0,
+          as.numeric(params[1]), as.numeric(params[2]), as.numeric(params[3])
+        )
+      )
+
+    df <- if (input$strikeOrDelta_CS == "Strike") {
+      x_lab <- "Strike"
+      op |>
+        mutate(x = strike) |>
+        filter(!is.na(bsm_impvol))
+    } else {
+      x_lab <- "Delta"
+      op |>
+        mutate(
+          x = ifelse(type == "Call", delta, 1 + delta)
+        ) |>
+        filter(!is.na(bsm_impvol))
+    }
+
+    df_gen_data <- if (input$strikeOrDelta_CS == "Strike") {
+      gen_data |>
+        mutate(x = strike)
+    } else {
+      gen_data |>
+        mutate(x = delta)
+    }
+
+    df |>
+      ggplot(aes(x = x, y = bsm_impvol, colour = type)) +
+      geom_point() +
+      labs(x = x_lab, y = "Volatilidade") +
+      geom_line(aes(x = x, y = csm_impvol), data = df_gen_data, colour = "black")
+  })
+
   observeEvent(input$refdate, {
     op <- optionsSuperset()
     symbols_counts <- op |>
@@ -213,6 +292,51 @@ server <- function(input, output, session) {
       choices = maturities,
       selected = maturities[1]
     )
+  })
+
+  csmParams <- reactiveVal()
+
+  output$csmParams <- renderUI({
+    validate(
+      need(csmParams(), "Rodar parâmetros")
+    )
+    params <- csmParams()
+    p(
+      strong("sigma = "), format(params["sigma"], digits = 4),
+      strong("mu3 = "),   format(params["mu3"], digits = 4),
+      strong("mu4 = "),   format(params["mu4"], digits = 4)
+    )
+  })
+
+  csmOptionsData <- reactive({
+    op <- optionsData()
+    params <- csmParams()
+    op |>
+      mutate(
+        theo_price = csmprice(
+          type, close.underlying, strike, time_to_maturity, rate, 0,
+          params[1], params[2], params[3]
+        ),
+        csm_impvol = bsmimpvol(
+          theo_price, type, close.underlying, strike, time_to_maturity, rate, 0
+        )
+      )
+  })
+
+  observeEvent(input$fitCorradoSuModel, {
+    if (input$optionMaturity == "" || length(input$optionMaturity) > 1) {
+      return(NULL)
+    }
+    op <- optionsData()
+    params <- with(op, {
+      csm_fit_min_price(
+        par = c(0.1, 0, 3),
+        type, close.underlying, strike, rate, 0, time_to_maturity, close, 1,
+        control = list(trace = 3)
+      )
+    })
+
+    csmParams(params)
   })
 }
 
