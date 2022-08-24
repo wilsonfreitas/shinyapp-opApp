@@ -24,11 +24,11 @@ ui <- fluidPage(
     tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
   ),
   theme = .theme,
-  titlePanel("Volatilidade Implícita de Opções de Ações"),
+  titlePanel("Opções de Ações"),
   fluidRow(
     div(span("1", style = "color: black;")),
     column(2, dateInput("refdate", "Data de referência", PARAMS$refdate)),
-    column(2, selectInput("underlyingSymbol", "Ações", "")),
+    column(2, selectInput("underlyingSymbol", "Ações (# de opções)", "")),
     column(
       2,
       checkboxGroupInput(
@@ -36,7 +36,7 @@ ui <- fluidPage(
       )
     ),
     column(
-      6, checkboxGroupInput("optionMaturity", "Vencimento", "", NULL, TRUE)
+      6, checkboxGroupInput("optionMaturity", "Vencimentos", "", NULL, TRUE)
     )
   ),
   br(),
@@ -49,7 +49,7 @@ ui <- fluidPage(
       )
     ),
     tabPanel(
-      "Volatilidade Implícita",
+      "Gráficos",
       div(span("1", style = "color: black;")),
       fluidRow(
         column(5,
@@ -63,8 +63,16 @@ ui <- fluidPage(
         column(
           5,
           radioButtons(
-            "volOrVar", "Eixo y (Volatilidade ou Variância Total)",
-            c("Volatilidade" = "vol", "Variância Total" = "var"), "vol",
+            "volOrVar", "Eixo y",
+            c(
+              "Volatilidade" = "vol",
+              "Delta" = "delta",
+              "Gamma" = "gamma",
+              "Vega" = "vega",
+              "Theta" = "theta",
+              "Rho" = "rho",
+              "Variância Total" = "var"
+            ), "vol",
             inline = TRUE
           )
         )
@@ -143,6 +151,9 @@ server <- function(input, output, session) {
         delta = bsmdelta(
           type, close.underlying, strike, time_to_maturity, rate, 0, bsm_impvol
         ),
+        gamma = bsmgamma(
+          type, close.underlying, strike, time_to_maturity, rate, 0, bsm_impvol
+        ),
         vega = bsmvega(
           type, close.underlying, strike, time_to_maturity, rate, 0, bsm_impvol
         ),
@@ -161,11 +172,12 @@ server <- function(input, output, session) {
       optionsData() |>
         select(
           symbol, volume, biz_days, type, strike, close.underlying,
-          close, bsm_impvol, delta, vega, theta, rho
+          close, bsm_impvol, delta, gamma, vega, theta, rho
         ) |>
         mutate(
           delta = n_format(delta),
           vega = n_format(vega),
+          gamma = n_format(gamma),
           rho = n_format(rho),
           theta = n_format(theta),
           bsm_impvol = n_format(bsm_impvol),
@@ -186,26 +198,39 @@ server <- function(input, output, session) {
       x_lab <- "Delta"
       optionsData() |>
         mutate(
-          x = ifelse(type == "Call", delta, 1 + delta)
+          x = delta # ifelse(type == "Call", delta, 1 + delta)
         ) |>
         filter(!is.na(bsm_impvol))
     }
 
     df <- if (input$volOrVar == "vol") {
       y_lab <- "Volatilidade"
-      df |>
-        mutate(y = bsm_impvol)
+      df |> mutate(y = bsm_impvol)
+    } else if (input$volOrVar == "delta") {
+      y_lab <- "Delta"
+      df |> mutate(y = delta)
+    } else if (input$volOrVar == "gamma") {
+      y_lab <- "Gamma"
+      df |> mutate(y = gamma)
+    } else if (input$volOrVar == "theta") {
+      y_lab <- "Theta"
+      df |> mutate(y = theta)
+    } else if (input$volOrVar == "vega") {
+      y_lab <- "Vega"
+      df |> mutate(y = vega)
+    } else if (input$volOrVar == "rho") {
+      y_lab <- "Rho"
+      df |> mutate(y = rho)
     } else {
       y_lab <- "Variância Total"
-      df |>
-        mutate(y = bsm_impvol * bsm_impvol * biz_days / 252)
+      df |> mutate(y = bsm_impvol * bsm_impvol * biz_days / 252)
     }
 
     df |>
       ggplot(aes(x = x, y = y, color = factor(biz_days))) +
       geom_point() +
       labs(x = x_lab, y = y_lab, color = "Dias Úteis") +
-      facet_wrap(type ~ .)
+      facet_wrap(type ~ ., scales = "free_x")
   })
 
   output$plotImpvol_CS <- renderPlotly({
@@ -272,7 +297,8 @@ server <- function(input, output, session) {
     op <- optionsSuperset()
     symbols_counts <- op |>
       group_by(symbol.underlying) |>
-      count()
+      count() |>
+      filter(n > 10)
     symbols <- symbols_counts$symbol.underlying
     names(symbols) <- paste(
       symbols_counts$symbol.underlying, "-", symbols_counts$n
